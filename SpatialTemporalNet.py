@@ -45,11 +45,10 @@ class BottleneckBlock(nn.Module):
             nn.Conv2d(in_channels=input_channels, out_channels=output_channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(output_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=output_channels, out_channels=output_channels, kernel_size=3, padding=1,
-                      stride=stride),
+            nn.Conv2d(in_channels=output_channels, out_channels=output_channels, kernel_size=3, padding=1, stride=stride,bias=False),
             nn.BatchNorm2d(output_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels=output_channels, out_channels=output_channels, kernel_size=3, padding=1, stride=1,
+            nn.Conv2d(in_channels=output_channels, out_channels=output_channels * self.expansion, kernel_size=3, padding=1, stride=1,
                       bias=False),
             nn.BatchNorm2d(output_channels)
         )
