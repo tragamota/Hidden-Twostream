@@ -100,9 +100,3 @@ class MotionNet(nn.Module):
         flow2_out = self.flow2(out)
 
         return flow2_out, flow3_out, flow4_out, flow6_out
-
-
-# Initialize the model
-motion_net = MotionNet()
-
-summary(motion_net, (33, 224, 224))
