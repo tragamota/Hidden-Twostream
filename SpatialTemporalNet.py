@@ -74,6 +74,7 @@ class ResNet(nn.Module):
     def __init__(self, block, input_channels, layers, num_classes, use_classifier=False):
         super(ResNet, self).__init__()
 
+        self.base_layers = 64
         self.use_classifier = use_classifier
 
         self.head = nn.Sequential(
@@ -103,16 +104,16 @@ class ResNet(nn.Module):
         downsample = None
         layers = []
 
-        if stride != 1 or self.in_channels != channels * block_type.expansion:
+        if stride != 1 or self.base_layers != channels * block_type.expansion:
             downsample = nn.Sequential(
-                nn.Conv2d(self.in_channels, channels * block_type.expansion, kernel_size=1, stride=stride),
+                nn.Conv2d(self.base_layers, channels * block_type.expansion, kernel_size=1, stride=stride),
                 nn.BatchNorm2d(channels * block_type.expansion)
             )
 
         layers.append(block_type(self.base_layers, channels, stride, downsample=downsample))
 
         for _ in range(1, block_count):
-            layers.append(block_type(self.base_layers, channels))
+            layers.append(block_type(channels, channels, 1))
 
         self.base_layers = channels * block_type.expansion
 
@@ -124,7 +125,7 @@ class ResNet(nn.Module):
 
         if self.use_classifier:
             x = self.avgpool(x)
-            x = self.flatten()
+            x = self.flatten(x)
             x = self.fc(x)
 
         return x
