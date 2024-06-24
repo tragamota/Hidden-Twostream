@@ -11,7 +11,7 @@ class CharbonnierPenalty(nn.Module):
         return (x ** 2 + epsilon ** 2) ** alpha
 
 
-class PixelwiseReconstructionLoss(nn.modules):
+class PixelwiseReconstructionLoss(nn.Module):
 
     def __init__(self):
         super(PixelwiseReconstructionLoss, self)
@@ -45,11 +45,11 @@ class SSIMLoss(nn.Module):
         return 0
 
 
-class TwoStreamLoss(nn.Module):
+class MotionNetLoss(nn.Module):
     SSIMLoss = SSIMLoss()
 
     def __init__(self, loss_weights=[]):
-        super(TwoStreamLoss, self).__init__()
+        super(MotionNetLoss, self).__init__()
 
     def forward(self):
 
