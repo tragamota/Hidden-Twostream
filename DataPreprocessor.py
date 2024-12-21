@@ -11,7 +11,6 @@ import cv2
 
 codec = cv2.VideoWriter_fourcc(*'mp4v')
 
-
 def load_video_frames(video_path):
     cap = cv2.VideoCapture(video_path)
 
@@ -47,8 +46,6 @@ def save_frame_as_video(video, name):
     out = cv2.VideoWriter(name, codec, 11, (W, H), True)
 
     for frame in video:
-        # frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-
         out.write(frame)
 
     out.release()
@@ -84,7 +81,8 @@ def main(args):
 
         output_data_pair.append((f'{video_name}.mp4', video_label))
 
-    pd.DataFrame(output_data_pair, columns=['filename', 'label']).to_csv(os.path.join(args.output_dir, args.output_name), header=False, index=False)
+    output_pd = pd.DataFrame(output_data_pair, columns=['filename', 'label'])
+    output_pd.to_csv(os.path.join(args.output_dir, args.output_name), header=False, index=False)
 
 
 if __name__ == '__main__':
