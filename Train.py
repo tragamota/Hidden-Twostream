@@ -1,18 +1,25 @@
 import argparse
 import os
-from os import path
+
 
 import numpy as np
 import pandas as pd
+import albumentations as A
 import torch
 
+from os import path
+
+from albumentations.pytorch import ToTensorV2
+from torchvision.transforms.v2 import ToTensor
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
 from torch import nn
-from torch.utils.data import dataloader, DataLoader
+from torch.utils.data import DataLoader
 from torchsummary import summary
-from torchvision import transforms
+from torchvision.models import resnet18, ResNet18_Weights
+
+from sklearn.model_selection import train_test_split
 
 from Loss import MotionNetLoss
 from MotionNet import MotionNet
@@ -37,7 +44,9 @@ def train(dataloader, model, loss_fn, optim, device):
     model.train()
 
     for X, y in tqdm(dataloader):
-        X, y = X.to(device), y.to(device)
+        X = X.to(device, non_blocking=True).float()
+        X = X / 255
+        y = y.to(device, non_blocking=True)
 
         pred = model(X)
         loss = loss_fn(pred, y)
@@ -62,7 +71,9 @@ def validate(dataloader, model, loss_fn, device):
 
     with torch.no_grad():
         for X, y in tqdm(dataloader):
-            X, y = X.to(device), y.to(device)
+            X = X.to(device, non_blocking=True).float()
+            X = X / 255
+            y = y.to(device, non_blocking=True)
 
             pred = model(X)
 
@@ -75,6 +86,14 @@ def validate(dataloader, model, loss_fn, device):
 
 
 def main(args):
+    UFC101_transforms = A.Compose([
+        A.Resize(224, 224),
+        # A.SafeRotate(limit=20, p=0.5),
+        # A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.1, p=0.2),
+        # A.HueSaturationValue(hue_shift_limit=0.1, sat_shift_limit=0.2, val_shift_limit=0.2, p=0.3)
+        ToTensorV2()
+    ])
+
     if not os.path.exists(args.output):
         os.mkdir(args.output)
 
@@ -83,22 +102,26 @@ def main(args):
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    df = pd.read_csv(path.join(args.dir, 'trainlist01.txt'), sep=' ')
+    df = pd.read_csv(path.join(args.dir, 'train.csv'))
 
     train_df, validation_df = train_test_split(df, test_size=0.2, shuffle=True)
 
-    train_data = UFC101(train_df, args.dir, transform=transforms.Resize((224, 224)))
-    validation_data = UFC101(validation_df, args.dir, transform=transforms.Resize((224, 224)))
+    train_data = UFC101(train_df, args.dir, transform=UFC101_transforms)
+    validation_data = UFC101(validation_df, args.dir, transform=UFC101_transforms)
 
-    train_loader = DataLoader(train_data, batch_size=args.batch, shuffle=True, pin_memory=True, num_workers=args.workers)
-    validation_loader = DataLoader(validation_data, batch_size=args.batch, shuffle=True, pin_memory=True, num_workers=args.workers)
+    train_loader = DataLoader(train_data, batch_size=args.batch, shuffle=True, num_workers=args.workers)
+    validation_loader = DataLoader(validation_data, batch_size=args.batch, shuffle=False, num_workers=args.workers)
 
-    model = ResNet(BasicBlock, input_channels=33, layers=[2, 2, 2, 2], num_classes=101, use_classifier=True)
+    model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+    model.conv1 = nn.Conv2d(33, 64, kernel_size=7, stride=2, padding=3, bias=False)
+    model.fc = nn.Linear(512, 101, bias=False)
+
+    # model = ResNet(BasicBlock, input_channels=33, layers=[2, 2, 2, 2], num_classes=101, use_classifier=True)
     model.to(device)
 
-    print(summary(model, (33, 224, 224)))
+    summary(model, (33, 224, 224))
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss() if args.modal != "MotionNet" else MotionNetLoss()
     criterion = criterion.to(device)
 
@@ -148,8 +171,8 @@ if __name__ == "__main__":
     args.add_argument('--dir', help='Directory of data', required=True, type=str, default='data')
     args.add_argument('--epochs', help='Number of epochs', default=50, type=int)
     args.add_argument('--seed', help='Seed for random number generator', default=42, type=int)
-    args.add_argument('--batch', help='Batch size', default=64, type=int)
-    args.add_argument('--lr', help='Learning rate', default=0.001, type=float)
+    args.add_argument('--batch', help='Batch size', default=16, type=int)
+    args.add_argument('--lr', help='Learning rate', default=1e-3, type=float)
     args.add_argument('--workers', help='Number of data loading workers', default=4, type=int)
     args.add_argument('--frames', help='Number of sampled frames', default=11, type=int)
     args.add_argument('--momentum', help='Momentum', default=0.9, type=float)
