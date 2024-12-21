@@ -86,11 +86,16 @@ def validate(dataloader, model, loss_fn, device):
 
 
 def main(args):
-    UFC101_transforms = A.Compose([
+    UFC101_train_transform = A.Compose([
         A.Resize(224, 224),
-        # A.SafeRotate(limit=20, p=0.5),
-        # A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.1, p=0.2),
-        # A.HueSaturationValue(hue_shift_limit=0.1, sat_shift_limit=0.2, val_shift_limit=0.2, p=0.3)
+        A.SafeRotate(limit=20, p=0.5),
+        A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.1, p=0.2),
+        A.HueSaturationValue(hue_shift_limit=0.1, sat_shift_limit=0.2, val_shift_limit=0.2, p=0.3),
+        ToTensorV2()
+    ])
+
+    UFC101_val_transform = A.Compose([
+        A.Resize(224, 224),
         ToTensorV2()
     ])
 
@@ -106,8 +111,8 @@ def main(args):
 
     train_df, validation_df = train_test_split(df, test_size=0.2, shuffle=True)
 
-    train_data = UFC101(train_df, args.dir, transform=UFC101_transforms)
-    validation_data = UFC101(validation_df, args.dir, transform=UFC101_transforms)
+    train_data = UFC101(train_df, args.dir, transform=UFC101_train_transform)
+    validation_data = UFC101(validation_df, args.dir, transform=UFC101_val_transform)
 
     train_loader = DataLoader(train_data, batch_size=args.batch, shuffle=True, num_workers=args.workers)
     validation_loader = DataLoader(validation_data, batch_size=args.batch, shuffle=False, num_workers=args.workers)
