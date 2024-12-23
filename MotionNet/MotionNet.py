@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from torchsummary import summary
 
 class MotionNet(nn.Module):
     def __init__(self):
@@ -99,4 +98,4 @@ class MotionNet(nn.Module):
 
         flow2_out = self.flow2(out)
 
-        return flow2_out, flow3_out, flow4_out, flow6_out
+        return flow2_out, flow3_out, flow4_out, flow5_out, flow6_out

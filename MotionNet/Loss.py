@@ -1,5 +1,8 @@
 import torch
 from torch import nn
+import torch.nn.functional as F
+
+from WarpTransform import WarpTransformation
 
 
 class CharbonnierPenalty(nn.Module):
@@ -17,24 +20,10 @@ class PixelwiseReconstructionLoss(nn.Module):
     def __init__(self):
         super(PixelwiseReconstructionLoss, self).__init__()
 
-    def forward(self, I1, I2, Vx, Vy):
-        B, C, H, W = I1.shape
+    def forward(self, I1, I2):
+        diff = I1 - I2
 
-        x = torch.linspace(-1, 1, W, device=I1.device)
-        y = torch.linspace(-1, 1, H, device=I1.device)
-
-        grid_y, grid_x = torch.meshgrid(y, x, indexing="ij")
-        grid = torch.stack((grid_x, grid_y), dim=-1)
-        grid = grid.unsqueeze(0).repeat(B, 1, 1, 1, 1)
-
-        flow = torch.stack((Vx, Vy), dim=-1)
-        grid = grid + flow
-
-        warped_I2 = torch.grid_sample(I2, grid, mode='bilinear', align_corners=False)
-
-        diff = I1 - warped_I2
-
-        return self.charbonnier_penalty(diff, self.epsilon, self.alpha).mean()
+        return  self.charbonnier_penalty(diff)
 
 
 class SmoothnessLoss(nn.Module):
@@ -43,11 +32,14 @@ class SmoothnessLoss(nn.Module):
     def __init__(self):
         super(SmoothnessLoss, self).__init__()
 
-    def forward(self, flow_x: torch.Tensor, flow_y: torch.Tensor):
-        delta_Vx_x = torch.gradient(flow_x, dim=1)
-        delta_Vx_y = torch.gradient(flow_x, dim=2)
-        delta_Vy_x = torch.gradient(flow_y, dim=1)
-        delta_Vy_y = torch.gradient(flow_y, dim=2)
+    def forward(self, flow: torch.Tensor):
+        flow_x = flow[:, 0::2, :, :]
+        flow_y = flow[:, 1::2, :, :]
+
+        delta_Vx_x = torch.gradient(flow_x, dim=1)[0]
+        delta_Vx_y = torch.gradient(flow_x, dim=2)[0]
+        delta_Vy_x = torch.gradient(flow_y, dim=1)[0]
+        delta_Vy_y = torch.gradient(flow_y, dim=2)[0]
 
         return (self.charbonnier_penalty(delta_Vx_x) + self.charbonnier_penalty(delta_Vx_y) +
                 self.charbonnier_penalty(delta_Vy_x) + self.charbonnier_penalty(delta_Vy_y))
@@ -71,8 +63,13 @@ class SSIMLoss(nn.Module):
         return numerator / denominator
 
     def forward(self, I1, I2):
-        I1_patches = I1.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
-        I2_patches = I2.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
+        local_patch_size = self.patch_size
+
+        if(I1.shape[2] < local_patch_size):
+            local_patch_size = I1.shape[2]
+
+        I1_patches = I1.unfold(2, local_patch_size, local_patch_size).unfold(3, local_patch_size, local_patch_size)
+        I2_patches = I2.unfold(2, local_patch_size, local_patch_size).unfold(3, local_patch_size, local_patch_size)
 
         B, C, PH, PW, H, W = I1_patches.shape
 
@@ -89,11 +86,29 @@ class SSIMLoss(nn.Module):
 
 
 class MotionNetLoss(nn.Module):
-    SSIMLoss = SSIMLoss()
+    warp_transformation = WarpTransformation()
 
-    def __init__(self, loss_weights=[]):
+    SSIMLoss = SSIMLoss()
+    SmoothnessLoss = SmoothnessLoss()
+    PixelwiseLoss = PixelwiseReconstructionLoss()
+
+    def __init__(self, weights=[1, 0.01, 1]):
         super(MotionNetLoss, self).__init__()
 
-    def forward(self):
+        self.weights = weights
 
-        return 0
+    def forward(self, images, flows):
+        _, _, FH, FW = flows.shape
+
+        images_downsampled = F.interpolate(images, size=(FH, FW), mode='bilinear', align_corners=True)
+        images_split = images_downsampled.split(3, dim=1)
+        flow_split = flows.split(2, dim=1)
+
+        images_warped = [self.warp_transformation(image, flow) for image, flow in zip(images_split[1:], flow_split)]
+        images_warped = torch.cat(images_warped, dim=1)
+
+        similarity_loss = self.SSIMLoss(images_downsampled[:, 0:30, :, :], images_warped).mean()
+        smooth_loss = self.SmoothnessLoss(flows).mean()
+        pixel_loss = self.PixelwiseLoss(images_downsampled[:, 0:30, :, :], images_warped).mean()
+
+        return self.weights[0] * pixel_loss + self.weights[1] * smooth_loss + self.weights[2] * similarity_loss
