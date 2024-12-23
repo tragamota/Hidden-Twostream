@@ -1,7 +1,7 @@
 import torch
-from torch import nn
 import torch.nn.functional as F
 
+from torch import nn
 from WarpTransform import WarpTransformation
 
 
@@ -23,7 +23,7 @@ class PixelwiseReconstructionLoss(nn.Module):
     def forward(self, I1, I2):
         diff = I1 - I2
 
-        return  self.charbonnier_penalty(diff)
+        return  self.charbonnier_penalty(diff, alpha=0.4)
 
 
 class SmoothnessLoss(nn.Module):
@@ -41,48 +41,51 @@ class SmoothnessLoss(nn.Module):
         delta_Vy_x = torch.gradient(flow_y, dim=1)[0]
         delta_Vy_y = torch.gradient(flow_y, dim=2)[0]
 
-        return (self.charbonnier_penalty(delta_Vx_x) + self.charbonnier_penalty(delta_Vx_y) +
-                self.charbonnier_penalty(delta_Vy_x) + self.charbonnier_penalty(delta_Vy_y))
+        return (self.charbonnier_penalty(delta_Vx_x, alpha=0.3) + self.charbonnier_penalty(delta_Vx_y, alpha=0.3) +
+                self.charbonnier_penalty(delta_Vy_x, alpha=0.3) + self.charbonnier_penalty(delta_Vy_y, alpha=0.3))
 
 
 class SSIMLoss(nn.Module):
-
     def __init__(self, patch=8, c1=1e-4, c2=1e-3):
         super(SSIMLoss, self).__init__()
         self.patch_size = patch
         self.c1 = c1
         self.c2 = c2
 
-    def compute_ssim(self, patch1, patch2):
-        mu1, mu2 = patch1.mean(), patch2.mean()
-        sigma1, sigma2 = patch1.var(), patch2.var()
-        sigma12 = ((patch1 - mu1) * (patch2 - mu2)).mean()
+    def compute_ssim(self, I1_patches, I2_patches):
+        # Compute mean
+        mu1 = I1_patches.mean(dim=(-1, -2), keepdim=True)  # (B, C, N, 1, 1)
+        mu2 = I2_patches.mean(dim=(-1, -2), keepdim=True)
+
+        # Compute variance
+        sigma1 = ((I1_patches - mu1) ** 2).mean(dim=(-1, -2), keepdim=True)
+        sigma2 = ((I2_patches - mu2) ** 2).mean(dim=(-1, -2), keepdim=True)
+
+        # Compute covariance
+        sigma12 = ((I1_patches - mu1) * (I2_patches - mu2)).mean(dim=(-1, -2), keepdim=True)
+
+        # Compute SSIM
         numerator = (2 * mu1 * mu2 + self.c1) * (2 * sigma12 + self.c2)
         denominator = (mu1 ** 2 + mu2 ** 2 + self.c1) * (sigma1 + sigma2 + self.c2)
+        ssim = numerator / denominator
 
-        return numerator / denominator
+        return ssim  # (B, C, N, 1, 1)
 
     def forward(self, I1, I2):
-        local_patch_size = self.patch_size
-
-        if(I1.shape[2] < local_patch_size):
-            local_patch_size = I1.shape[2]
+        local_patch_size = min(self.patch_size, I1.shape[2], I1.shape[3])
 
         I1_patches = I1.unfold(2, local_patch_size, local_patch_size).unfold(3, local_patch_size, local_patch_size)
         I2_patches = I2.unfold(2, local_patch_size, local_patch_size).unfold(3, local_patch_size, local_patch_size)
 
-        B, C, PH, PW, H, W = I1_patches.shape
+        B, C, H_p, W_p, patch_h, patch_w = I1_patches.shape
+        I1_patches = I1_patches.reshape(B, C, -1, patch_h, patch_w)  # (B, C, N, h, w)
+        I2_patches = I2_patches.reshape(B, C, -1, patch_h, patch_w)
 
-        I1_patches = I1_patches.reshape(B, C, PH * PW, H, W)
-        I2_patches = I2_patches.reshape(B, C, PH * PW, H, W)
+        ssim = self.compute_ssim(I1_patches, I2_patches)  # (B, C, N, 1, 1)
 
-        score = torch.stack([
-            torch.tensor([
-                self.compute_ssim(p1, p2) for p1, p2 in zip(I1_patches[b], I2_patches[b])
-            ], device=I1.device) for b in range(B)
-        ])
+        loss = (1 - ssim).mean()
 
-        return score
+        return loss
 
 
 class MotionNetLoss(nn.Module):
@@ -92,7 +95,7 @@ class MotionNetLoss(nn.Module):
     SmoothnessLoss = SmoothnessLoss()
     PixelwiseLoss = PixelwiseReconstructionLoss()
 
-    def __init__(self, weights=[1, 0.01, 1]):
+    def __init__(self, weights=(1, 0.01, 1)):
         super(MotionNetLoss, self).__init__()
 
         self.weights = weights

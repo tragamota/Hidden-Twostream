@@ -1,75 +1,56 @@
 import argparse
 import os
-
-
-import numpy as np
-import pandas as pd
-import albumentations as A
-import torch
-
 from os import path
 
-from albumentations.pytorch import ToTensorV2
-from torch.distributions.constraints import nonnegative
-from torchvision.transforms.v2 import ToTensor
-from tqdm import tqdm
-from sklearn.model_selection import train_test_split
+import albumentations as A
+import numpy as np
+import pandas as pd
+import torch
 
-from torch import nn
+from albumentations.pytorch import ToTensorV2
+from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torchsummary import summary
-from torchvision.models import resnet18, ResNet18_Weights
-
-from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 from Loss import MotionNetLoss
 from MotionNet import MotionNet
-from SpatialTemporalNet import ResNet, BasicBlock
 from datasets.UFC101 import UFC101
 
 
 def get_device():
-    device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps" if torch.backends.mps.is_available() else "cpu"
+    return (
+        "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
     )
 
-    return device
 
-
-def train(dataloader, model, loss_fn, optim, device):
-    running_loss = 0.0
-    running_accuracy = 0.0
-
+def train_epoch(dataloader, model, loss_fn, optimizer, device):
     model.train()
+    running_loss = 0.0
 
-    for X, y in tqdm(dataloader):
-        X = X.to(device, non_blocking=True).float()
-        X = X / 255
+    with tqdm(dataloader, desc="Training", leave=True) as pbar:
+        for X, _ in pbar:
+            X = X.to(device, non_blocking=True).float() / 255.0
 
-        optim.zero_grad()
+            optimizer.zero_grad()
 
-        optical_flow = model(X)
+            optical_flow = model(X)
 
-        loss_2 = loss_fn(X, optical_flow[0])
-        loss_3 = loss_fn(X, optical_flow[1])
-        loss_4 = loss_fn(X, optical_flow[2])
-        loss_5 = loss_fn(X, optical_flow[3])
-        loss_6 = loss_fn(X, optical_flow[4])
+            loss = [w * loss_fn(X, of) for w, of in zip([0.01, 0.02, 0.04, 0.08, 0.16], optical_flow)]
+            loss = sum(loss)
 
-        loss = 0.02 * loss_2 + 0.04 * loss_3 + loss_4 + 0.08 * loss_5 + 0.16 * loss_6
+            loss.backward()
+            optimizer.step()
 
-        loss.backward()
-        optim.step()
+            pbar.set_postfix({"loss": loss.item()})
 
-        running_loss += loss.item()
+            running_loss += loss.item()
 
-    return running_loss / len(dataloader), running_accuracy / len(dataloader.dataset)
+    return running_loss / len(dataloader)
 
 
-def main(args):
-    UFC101_train_transform = A.Compose([
+def prepare_transforms():
+    return A.Compose([
         A.Resize(224, 224),
         A.SafeRotate(limit=20, p=0.5),
         A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.1, p=0.2),
@@ -77,8 +58,10 @@ def main(args):
         ToTensorV2()
     ])
 
+
+def main(args):
     if not os.path.exists(args.output):
-        os.mkdir(args.output)
+        os.makedirs(args.output)
 
     device = get_device()
 
@@ -86,48 +69,37 @@ def main(args):
     torch.manual_seed(args.seed)
 
     df = pd.read_csv(path.join(args.dir, 'train.csv'))
+    train_df, _ = train_test_split(df, test_size=0.2, shuffle=True, random_state=args.seed)
 
-    train_df, validation_df = train_test_split(df, test_size=0.2, shuffle=True)
-
-    train_data = UFC101(train_df, args.dir, transform=UFC101_train_transform)
-
+    train_data = UFC101(train_df, args.dir, transform=prepare_transforms())
     train_loader = DataLoader(train_data, batch_size=args.batch, shuffle=True, num_workers=args.workers)
 
     model = MotionNet().to(device)
-
     summary(model, (33, 224, 224))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    criterion = MotionNetLoss().to(device)
+    loss_fn = MotionNetLoss().to(device)
 
-    train_losses = np.zeros(args.epochs, dtype=float)
-    train_accuracies = np.zeros(args.epochs, dtype=float)
+    train_losses = []
 
     for epoch in range(args.epochs):
-        train_results = train(train_loader, model, criterion, optimizer, device)
+        train_loss = train_epoch(train_loader, model, loss_fn, optimizer, device)
+        train_losses.append(train_loss)
 
-        train_losses[epoch] = train_results[0]
+        print(f"Epoch {epoch + 1}/{args.epochs} - Train Loss: {train_loss:.4f}")
 
-        print('---' * 40)
-        print(f"Epoch: {epoch + 1}/{args.epochs}\n\t\t Train Loss: {train_losses[epoch]}, "
-              f"Train Accuracy: {train_accuracies[epoch]}"
-              )
-        print('---' * 40 + "\n")
-
-    torch.save(model.state_dict(), os.path.join(args.output, "last.pt"))
-
-    print("Finished Training")
+    torch.save(model.state_dict(), path.join(args.output, "last.pt"))
+    print("Training complete. Model saved to", args.output)
 
 
 if __name__ == "__main__":
-    args = argparse.ArgumentParser(description='Hidden two-stream model')
+    parser = argparse.ArgumentParser(description='Train MotionNet for unsupervised learning')
+    parser.add_argument('--dir', help='Directory of data', required=True, type=str)
+    parser.add_argument('--epochs', help='Number of epochs', default=50, type=int)
+    parser.add_argument('--seed', help='Seed for random number generator', default=42, type=int)
+    parser.add_argument('--batch', help='Batch size', default=16, type=int)
+    parser.add_argument('--lr', help='Learning rate', default=1e-4, type=float)
+    parser.add_argument('--workers', help='Number of data loading workers', default=6, type=int)
+    parser.add_argument('--output', help='Output directory of model', required=True, type=str)
 
-    args.add_argument('--dir', help='Directory of data', required=True, type=str, default='data')
-    args.add_argument('--epochs', help='Number of epochs', default=50, type=int)
-    args.add_argument('--seed', help='Seed for random number generator', default=42, type=int)
-    args.add_argument('--batch', help='Batch size', default=16, type=int)
-    args.add_argument('--lr', help='Learning rate', default=1e-4, type=float)
-    args.add_argument('--workers', help='Number of data loading workers', default=6, type=int)
-    args.add_argument('--output', help='Output directory of model', required=True, type=str)
-
-    main(args.parse_args())
+    main(parser.parse_args())
