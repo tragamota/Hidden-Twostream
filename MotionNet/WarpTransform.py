@@ -10,7 +10,7 @@ class WarpTransformation(torch.nn.Module):
     def forward(self, image, flow):
         batch_size, channels, height, width = image.size()
 
-        grid_x, grid_y = torch.meshgrid(torch.arange(0, width), torch.arange(0, height))
+        grid_x, grid_y = torch.meshgrid(torch.arange(0, width), torch.arange(0, height), indexing='ij')
 
         grid_x = grid_x.float().to(image.device)
         grid_y = grid_y.float().to(image.device)

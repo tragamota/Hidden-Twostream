@@ -100,7 +100,7 @@ class MotionNetLoss(nn.Module):
 
         self.weights = weights
 
-    def forward(self, images, flows):
+    def forward(self, images, flows, smooth_weight):
         _, _, FH, FW = flows.shape
 
         images_downsampled = F.interpolate(images, size=(FH, FW), mode='bilinear', align_corners=True)
@@ -114,4 +114,4 @@ class MotionNetLoss(nn.Module):
         smooth_loss = self.SmoothnessLoss(flows).mean()
         pixel_loss = self.PixelwiseLoss(images_downsampled[:, 0:30, :, :], images_warped).mean()
 
-        return self.weights[0] * pixel_loss + self.weights[1] * smooth_loss + self.weights[2] * similarity_loss
+        return pixel_loss + smooth_weight * smooth_loss + similarity_loss
