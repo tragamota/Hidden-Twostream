@@ -4,15 +4,13 @@ import sys
 from os import path
 
 import albumentations as A
-import numpy as np
 import pandas as pd
 import torch
-from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
+from torch import GradScaler, autocast
 
 sys.path.append(os.path.abspath(os.getcwd()))
 
 from albumentations.pytorch import ToTensorV2
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torchsummary import summary
 from tqdm import tqdm
@@ -28,7 +26,7 @@ def get_device():
     )
 
 
-def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scheduler, device):
+def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scheduler, scaler, border_masks, device):
     model.train()
     running_loss = 0.0
 
@@ -41,21 +39,24 @@ def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scheduler, de
 
         optimizer.zero_grad()
 
-        optical_flow = model(X)
+        with autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
+            optical_flow = model(X)
 
-        loss = [loss_fn(X, of, w) for w, of in zip([0.01, 0.02, 0.04, 0.08, 0.16], optical_flow)]
-        loss = sum(loss)
+            loss = [loss_fn(X, of, weight, flow_scale, border_mask) for weight, flow_scale, border_mask, of in zip([0.01, 0.02, 0.04, 0.08, 0.16], [0.625, 1.25, 2.5, 5, 10], border_masks, optical_flow)]
+            loss = sum(loss)
 
-        loss.backward()
-        optimizer.step()
-        # scheduler.step(loss)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
-        pbar.set_postfix({"Batch Loss": f"{loss.item():.4f}"})
+        # loss.backward()
+        # optimizer.step()
 
-        running_loss += loss.item()
+        local_loss = loss.item()
 
-    # pbar.set_postfix({"Loss": running_loss / len(dataloader)})
-    # pbar.update()
+        pbar.set_postfix({"Batch Loss": f"{local_loss:.4f}"})
+
+        running_loss += local_loss
 
     return running_loss / len(dataloader)
 
@@ -63,12 +64,19 @@ def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scheduler, de
 def prepare_transforms():
     return A.Compose([
         A.Resize(224, 224),
-        # A.SafeRotate(limit=20, p=0.3),
-        # A.HorizontalFlip(p=0.3),
-        # A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.1, p=0.2),
-        # A.HueSaturationValue(hue_shift_limit=0.1, sat_shift_limit=0.2, val_shift_limit=0.2, p=0.3),
         ToTensorV2()
     ])
+
+
+def create_border_mask(shape):
+    mask = torch.ones(shape)
+
+    mask[0, :] = 0  # Top border
+    mask[-1, :] = 0  # Bottom border
+    mask[:, 0] = 0  # Left border
+    mask[:, -1] = 0  # Right border
+
+    return mask
 
 
 def main(args):
@@ -77,26 +85,27 @@ def main(args):
 
     device = get_device()
 
-    # np.random.seed(args.seed)
-    # torch.manual_seed(args.seed)
-
     df = pd.read_csv(path.join(args.dir, 'train.csv'))
 
     train_data = UFC101(df, args.dir, transform=prepare_transforms())
-    train_loader = DataLoader(train_data, batch_size=args.batch, shuffle=True, num_workers=args.workers)
+    train_loader = DataLoader(train_data, batch_size=args.batch, shuffle=True, pin_memory=True, pin_memory_device=device, num_workers=args.workers)
+
+    border_masks = [create_border_mask((1, 1, 7, 7)).to(device), create_border_mask((1, 1, 14, 14)), create_border_mask((1, 1, 28, 28)), create_border_mask((1, 1, 56, 56)), create_border_mask((1, 1, 112, 112))]
+    border_masks = [mask.to(device) for mask in border_masks[::-1]]
 
     model = MotionNet().to(device)
     summary(model, (33, 224, 224))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     # scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
+    scaler = GradScaler(enabled=True)
 
     loss_fn = MotionNetLoss().to(device)
 
     train_losses = []
 
     for epoch in range(args.epochs):
-        train_loss = train_epoch((epoch + 1, args.epochs), train_loader, model, loss_fn, optimizer, None, device)
+        train_loss = train_epoch((epoch + 1, args.epochs), train_loader, model, loss_fn, optimizer, None, scaler, border_masks, device)
         train_losses.append(train_loss)
 
         print(f"Epoch {epoch + 1}/{args.epochs} - Train Loss: {train_loss:.4f}", flush=True)
