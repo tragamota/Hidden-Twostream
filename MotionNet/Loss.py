@@ -97,10 +97,8 @@ class MotionNetLoss(nn.Module):
     SmoothnessLoss = SmoothnessLoss()
     PixelwiseLoss = PixelwiseReconstructionLoss()
 
-    def __init__(self, weights=(1, 0.01, 1)):
+    def __init__(self):
         super(MotionNetLoss, self).__init__()
-
-        self.weights = weights
 
     def forward(self, images, flows, smooth_weight, flow_scaling, border_mask):
         _, _, FH, FW = flows.shape

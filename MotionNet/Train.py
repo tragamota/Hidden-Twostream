@@ -26,37 +26,35 @@ def get_device():
     )
 
 
-def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scheduler, scaler, border_masks, device):
+def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scaler, border_masks, device):
     model.train()
     running_loss = 0.0
-
     desc = f"Training Epoch {epoch_info[0]}/{epoch_info[1]}"
 
-    pbar = tqdm(dataloader, desc=desc, leave=True, dynamic_ncols=True)
+    with tqdm(dataloader, desc=desc, dynamic_ncols=True, leave=True) as pbar:
+        for X, _ in pbar:
+            X = X.to(device, non_blocking=True).float() / 255.0
+            optimizer.zero_grad(set_to_none=True)
 
-    for X, _ in pbar:
-        X = X.to(device, non_blocking=True).float() / 255.0
+            with autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
+                optical_flow = model(X)
+                loss = sum(
+                    loss_fn(X, of, weight, flow_scale, border_mask)
+                    for weight, flow_scale, border_mask, of in zip(
+                        [0.01, 0.02, 0.04, 0.08, 0.16],
+                        [0.625, 1.25, 2.5, 5, 10],
+                        border_masks,
+                        optical_flow
+                    )
+                )
 
-        optimizer.zero_grad()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
-        with autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
-            optical_flow = model(X)
+            pbar.set_postfix({"Batch Loss": f"{loss.item():.4f}"})
 
-            loss = [loss_fn(X, of, weight, flow_scale, border_mask) for weight, flow_scale, border_mask, of in zip([0.01, 0.02, 0.04, 0.08, 0.16], [0.625, 1.25, 2.5, 5, 10], border_masks, optical_flow)]
-            loss = sum(loss)
-
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-
-        # loss.backward()
-        # optimizer.step()
-
-        local_loss = loss.item()
-
-        pbar.set_postfix({"Batch Loss": f"{local_loss:.4f}"})
-
-        running_loss += local_loss
+            running_loss += loss.item()
 
     return running_loss / len(dataloader)
 
@@ -80,39 +78,42 @@ def create_border_mask(shape):
 
 
 def main(args):
-    if not os.path.exists(args.output):
-        os.makedirs(args.output)
-
+    os.makedirs(args.output, exist_ok=True)
     device = get_device()
 
     df = pd.read_csv(path.join(args.dir, 'train.csv'))
-
     train_data = UFC101(df, args.dir, transform=prepare_transforms())
-    train_loader = DataLoader(train_data, batch_size=args.batch, shuffle=True, pin_memory=True, pin_memory_device=device, num_workers=args.workers)
+    train_loader = DataLoader(
+        train_data, batch_size=args.batch, shuffle=True, pin_memory=True,
+        pin_memory_device=device, num_workers=args.workers
+    )
 
-    border_masks = [create_border_mask((1, 1, 7, 7)).to(device), create_border_mask((1, 1, 14, 14)), create_border_mask((1, 1, 28, 28)), create_border_mask((1, 1, 56, 56)), create_border_mask((1, 1, 112, 112))]
-    border_masks = [mask.to(device) for mask in border_masks[::-1]]
+    border_masks = [
+                       create_border_mask((1, 1, size, size)).to(device)
+                       for size in [7, 14, 28, 56, 112]
+                   ][::-1]
 
     model = MotionNet().to(device)
     summary(model, (33, 224, 224))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-    # scheduler = ReduceLROnPlateau(optimizer, factor=0.5, patience=5)
     scaler = GradScaler(enabled=True)
-
     loss_fn = MotionNetLoss().to(device)
 
-    train_losses = []
-
     for epoch in range(args.epochs):
-        train_loss = train_epoch((epoch + 1, args.epochs), train_loader, model, loss_fn, optimizer, None, scaler, border_masks, device)
-        train_losses.append(train_loss)
-
+        train_loss = train_epoch(
+            (epoch + 1, args.epochs), train_loader, model, loss_fn, optimizer, scaler, border_masks, device
+        )
         print(f"Epoch {epoch + 1}/{args.epochs} - Train Loss: {train_loss:.4f}", flush=True)
 
-    torch.save(model.state_dict(), path.join(args.output, "last.pt"))
+        # Save model state every 5 epochs
+        if (epoch + 1) % 5 == 0:
+            checkpoint_path = path.join(args.output, f"checkpoint_epoch_{epoch + 1}.pt")
+            torch.save(model.state_dict(), checkpoint_path)
+            print(f"Checkpoint saved at {checkpoint_path}")
 
-    print("Training complete. Model saved to", args.output)
+    torch.save(model.state_dict(), path.join(args.output, "last.pt"))
+    print(f"Training complete. Model saved to {args.output}")
 
 
 if __name__ == "__main__":
