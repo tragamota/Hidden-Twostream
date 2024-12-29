@@ -16,7 +16,7 @@ from torchsummary import summary
 from tqdm import tqdm
 
 from Loss import MotionNetLoss
-from MotionNet import MotionNet
+from MotionNet import TinyMotionNet, MotionNet
 from datasets.UFC101 import UFC101
 
 
@@ -26,7 +26,7 @@ def get_device():
     )
 
 
-def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scaler, border_masks, device):
+def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scaler, loss_params, device):
     model.train()
     running_loss = 0.0
     desc = f"Training Epoch {epoch_info[0]}/{epoch_info[1]}"
@@ -36,14 +36,15 @@ def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scaler, borde
             X = X.to(device, non_blocking=True).float() / 255.0
             optimizer.zero_grad(set_to_none=True)
 
-            with autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
+            with autocast(device_type=device, dtype=torch.float16, enabled=True):
                 optical_flow = model(X)
                 loss = sum(
-                    loss_fn(X, of, weight, flow_scale, border_mask)
-                    for weight, flow_scale, border_mask, of in zip(
-                        [0.01, 0.02, 0.04, 0.08, 0.16],
-                        [0.625, 1.25, 2.5, 5, 10],
-                        border_masks,
+                    loss_fn(X, of, weight, flow_scale, border_mask, flow_mask)
+                    for weight, flow_scale, border_mask, flow_mask, of in zip(
+                        loss_params["ssim"],
+                        loss_params["flow"],
+                        loss_params["border_masks"],
+                        loss_params["flow_masks"],
                         optical_flow
                     )
                 )
@@ -66,13 +67,25 @@ def prepare_transforms():
     ])
 
 
-def create_border_mask(shape):
+def create_flow_border_mask(shape):
     mask = torch.ones(shape)
 
-    mask[0, :] = 0  # Top border
-    mask[-1, :] = 0  # Bottom border
-    mask[:, 0] = 0  # Left border
-    mask[:, -1] = 0  # Right border
+    for i in range(shape[1] // 2):
+        mask[:, i * 2, :, -1] = 0
+        mask[:, i * 2 + 1, -1, :] = 0
+
+    return mask
+
+
+def create_border_mask(shape, border_ratio=0.1):
+    mask = torch.ones(shape)
+
+    border_width = round(shape[-1] * border_ratio)
+
+    mask[:, :, :border_width, :] = 0  # Top border
+    mask[:, :, -border_width:, :] = 0  # Bottom border
+    mask[:, :, :, :border_width] = 0  # Left border
+    mask[:, :, :, -border_width:] = 0  # Right border
 
     return mask
 
@@ -82,18 +95,47 @@ def main(args):
     device = get_device()
 
     df = pd.read_csv(path.join(args.dir, 'train.csv'))
+
     train_data = UFC101(df, args.dir, transform=prepare_transforms())
     train_loader = DataLoader(
         train_data, batch_size=args.batch, shuffle=True, pin_memory=True,
         pin_memory_device=device, num_workers=args.workers
     )
 
-    border_masks = [
-                       create_border_mask((1, 1, size, size)).to(device)
-                       for size in [7, 14, 28, 56, 112]
-                   ][::-1]
+    if args.tiny:
+        model = TinyMotionNet()
 
-    model = MotionNet().to(device)
+        ssim_scales = [0.04, 0.08, 0.16]
+        flow_scales = [2.5, 5, 10]
+        border_masks = [create_border_mask((1, 1, size, size)).to(device)
+                        for size in [112, 56, 28]]
+        flow_border_mask = [
+            create_flow_border_mask((1, 20, size, size)).to(device)
+            for size in [112, 56, 28, 14, 7]
+        ]
+
+    else:
+        model = MotionNet()
+
+        ssim_scales = [0.01, 0.02, 0.04, 0.08, 0.16]
+        flow_scales = [0.625, 1.25, 2.5, 5, 10]
+        border_masks = [
+            create_border_mask((1, 1, size, size)).to(device)
+            for size in [112, 56, 28, 14, 7]
+        ]
+        flow_border_mask = [
+            create_flow_border_mask((1, 20, size, size)).to(device)
+            for size in [112, 56, 28, 14, 7]
+        ]
+
+    loss_params = {
+        "ssim": ssim_scales,
+        "flow": flow_scales,
+        "border_masks": border_masks,
+        "flow_masks": flow_border_mask
+    }
+
+    model = model.to(device)
     summary(model, (33, 224, 224))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -102,7 +144,7 @@ def main(args):
 
     for epoch in range(args.epochs):
         train_loss = train_epoch(
-            (epoch + 1, args.epochs), train_loader, model, loss_fn, optimizer, scaler, border_masks, device
+            (epoch + 1, args.epochs), train_loader, model, loss_fn, optimizer, scaler, loss_params, device
         )
         print(f"Epoch {epoch + 1}/{args.epochs} - Train Loss: {train_loss:.4f}", flush=True)
 
@@ -124,6 +166,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch', help='Batch size', default=16, type=int)
     parser.add_argument('--lr', help='Learning rate', default=3.2e-5, type=float)
     parser.add_argument('--workers', help='Number of data loading workers', default=6, type=int)
+    parser.add_argument("--tiny", action='store_true', help="Use tiny motionet", default=False)
     parser.add_argument('--output', help='Output directory of model', required=True, type=str)
 
     main(parser.parse_args())

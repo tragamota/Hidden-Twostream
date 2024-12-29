@@ -113,3 +113,66 @@ class MotionNet(nn.Module):
         flow2_out = self.flow2(out)
 
         return flow2_out, flow3_out, flow4_out, flow5_out, flow6_out
+
+
+class TinyMotionNet(nn.Module):
+    def __init__(self):
+        super(TinyMotionNet, self).__init__()
+
+        self.conv1 = nn.Conv2d(33, 64, kernel_size=7, stride=1, padding=3)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=5, stride=2, padding=2)
+        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
+        self.conv4 = nn.Conv2d(256, 128, kernel_size=3, stride=2, padding=1)
+
+        self.flow4 = nn.Conv2d(128, 20, kernel_size=3, stride=1, padding=1)
+        self.flow4_upsample = nn.ConvTranspose2d(20, 20, kernel_size=4, stride=2, padding=1)
+
+        self.deconv3 = nn.ConvTranspose2d(128, 128, kernel_size=4, stride=2, padding=1)
+        self.xconv3 = nn.Conv2d(404, 128, kernel_size=3, stride=1, padding=1)
+
+        self.flow3 = nn.Conv2d(128, 20, kernel_size=3, stride=1, padding=1)
+        self.flow3_upsample = nn.ConvTranspose2d(20, 20, kernel_size=4, stride=2, padding=1)
+
+        self.deconv2 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)
+        self.xconv2 = nn.Conv2d(212, 64, kernel_size=3, stride=1, padding=1)
+
+        self.flow2 = nn.Conv2d(64, 20, kernel_size=3, stride=1, padding=1)
+
+        self.relu = nn.ReLU(inplace=True)
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.ConvTranspose2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Linear):
+                nn.init.xavier_normal_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+
+    def forward(self, x):
+        conv1_out = self.relu(self.conv1(x))
+        conv2_out = self.relu(self.conv2(conv1_out))
+        conv3_out = self.relu(self.conv3(conv2_out))
+        conv4_out = self.relu(self.conv4(conv3_out))
+
+        flow4_out = self.flow4(conv4_out)
+        flow4_upsampled = self.flow4_upsample(flow4_out)
+
+        deconv3_out = self.deconv3(conv4_out)
+        xconv3_out = self.xconv3(torch.cat((deconv3_out, flow4_upsampled, conv3_out), dim=1))
+
+        flow3_out = self.flow3(xconv3_out)
+        flow3_upsampled = self.flow3_upsample(flow3_out)
+
+        deconv2_out = self.deconv2(xconv3_out)
+        xconv2_out = self.xconv2(torch.cat((deconv2_out, flow3_upsampled, conv2_out), dim=1))
+
+        flow2_out = self.flow2(xconv2_out)
+
+        return flow2_out, flow3_out, flow4_out

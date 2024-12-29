@@ -34,7 +34,9 @@ class SmoothnessLoss(nn.Module):
     def __init__(self):
         super(SmoothnessLoss, self).__init__()
 
-    def forward(self, flow: torch.Tensor):
+    def forward(self, flow: torch.Tensor, border_mask: torch.Tensor):
+        flow = flow * border_mask
+
         flow_x = flow[:, 0::2, :, :]
         flow_y = flow[:, 1::2, :, :]
 
@@ -100,7 +102,7 @@ class MotionNetLoss(nn.Module):
     def __init__(self):
         super(MotionNetLoss, self).__init__()
 
-    def forward(self, images, flows, smooth_weight, flow_scaling, border_mask):
+    def forward(self, images, flows, smooth_weight, flow_scaling, border_mask, flow_mask):
         _, _, FH, FW = flows.shape
 
         images_downsampled = F.interpolate(images, size=(FH, FW), mode='bilinear', align_corners=True)
@@ -111,7 +113,7 @@ class MotionNetLoss(nn.Module):
         images_warped = torch.cat(images_warped, dim=1)
 
         similarity_loss = self.SSIMLoss(images_downsampled[:, 0:30, :, :], images_warped)
-        smooth_loss = self.SmoothnessLoss(flows).mean()
+        smooth_loss = self.SmoothnessLoss(flows, flow_mask).mean()
         pixel_loss = self.PixelwiseLoss(images_downsampled[:, 0:30, :, :], images_warped, border_mask).mean()
 
         return pixel_loss + smooth_weight * smooth_loss + similarity_loss
