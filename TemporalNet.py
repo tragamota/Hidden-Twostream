@@ -19,8 +19,8 @@ class TemporalNet(nn.Module):
 
 
     def forward(self, x):
-        flow = self.motionNet(x)[0]
-        flow = self.motion_upscale(flow)
-        # flow = torch.clip(flow, -20/255, 20/255)
+        flows = self.motionNet(x)
+        flow = self.motion_upscale(flows[0])
+        flow = torch.clip(flow, -20/255, 20/255)
 
-        return self.temporal(flow)
+        return self.temporal(flow), *flows

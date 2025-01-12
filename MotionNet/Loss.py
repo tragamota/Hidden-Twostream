@@ -109,7 +109,7 @@ class MotionNetLoss(nn.Module):
         images_split = images_downsampled.split(3, dim=1)
         flow_split = flows.split(2, dim=1)
 
-        images_warped = [self.warp_transformation(image, flow_scaling * flow) for image, flow in zip(images_split[1:], flow_split)]
+        images_warped = [self.warp_transformation(image, flow) for image, flow in zip(images_split[1:], flow_split)]
         images_warped = torch.cat(images_warped, dim=1)
 
         similarity_loss = self.SSIMLoss(images_downsampled[:, 0:30, :, :], images_warped)

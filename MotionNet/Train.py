@@ -105,20 +105,20 @@ def main(args):
     if args.tiny:
         model = TinyMotionNet()
 
-        ssim_scales = [0.04, 0.08, 0.16]
-        flow_scales = [2.5, 5, 10]
+        ssim_scales = [0.01, 0.02, 0.04]
+        flow_scales = [10, 5, 2.5]
         border_masks = [create_border_mask((1, 1, size, size)).to(device)
                         for size in [112, 56, 28]]
         flow_border_mask = [
             create_flow_border_mask((1, 20, size, size)).to(device)
-            for size in [112, 56, 28, 14, 7]
+            for size in [112, 56, 28]
         ]
 
     else:
         model = MotionNet()
 
         ssim_scales = [0.01, 0.02, 0.04, 0.08, 0.16]
-        flow_scales = [0.625, 1.25, 2.5, 5, 10]
+        flow_scales = [10, 5, 2.5, 1.25, 0.625]
         border_masks = [
             create_border_mask((1, 1, size, size)).to(device)
             for size in [112, 56, 28, 14, 7]
