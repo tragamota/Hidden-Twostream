@@ -121,7 +121,7 @@ def main(args):
 
     summary(model, input_size=(33, 224, 224))
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
     criterion = nn.CrossEntropyLoss()
     criterion = criterion.to(device)
 
@@ -172,6 +172,6 @@ if __name__ == "__main__":
     args.add_argument('--momentum', help='Momentum', default=0.9, type=float)
     args.add_argument('--decay', help='Decay', default=0.999, type=float)
     args.add_argument('--output', help='Output directory of model', required=True, type=str)
-    args.add_argument('--modal', help='Model to train', choices=['SpatialNet', 'TemporalNet', 'TwoStreamNet'])
+    args.add_argument('--modal', help='Model to train', choices=['SpatialNet', 'TwoStreamNet'])
 
     main(args.parse_args())
