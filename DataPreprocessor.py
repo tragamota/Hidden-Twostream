@@ -1,95 +1,103 @@
 import argparse
+import json
 import os
 
-import pandas as pd
-import numpy as np
-import torch
 import cv2
+import pandas as pd
+
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+from sklearn.model_selection import train_test_split
+from torchcodec.decoders import VideoDecoder
+from tqdm import tqdm
 
 
-codec = cv2.VideoWriter_fourcc(*'mp4v')
+def convert_video(src_video_path, output_video_path):
+    try:
+        decoder = VideoDecoder(src_video_path, num_ffmpeg_threads=2, seek_mode="approximate")
+        frames = [frame.permute(1, 2, 0).numpy()[:, :, ::-1] for frame in decoder]  # to HWC, BGR
+    except Exception as e:
+        return None, f"Decode error in {src_video_path}: {e}"
 
-def load_video_frames(video_path):
-    cap = cv2.VideoCapture(video_path)
+    if not frames:
+        return None, f"No frames in {src_video_path}"
 
-    if not cap.isOpened():
-        print("Error: Could not open video.")
-        exit()
+    h, w, _ = frames[0].shape
+    os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    frame_channels = 3
+    try:
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+        out = cv2.VideoWriter(output_video_path, fourcc, 30, (w, h))
+        for f in frames:
+            out.write(f)
+        out.release()
+    except Exception as e:
+        return None, f"Encode error in {output_video_path}: {e}"
 
-    frames = np.empty((total_frames, frame_height, frame_width, frame_channels), dtype=np.uint8)
-
-    for i in range(total_frames):
-        ret, frame = cap.read()
-
-        if not ret:
-            print(f"Error reading frame {i} / {total_frames} from {video_path}")
-            break
-
-        frames[i] = frame
-
-    frames = frames[:i]
-
-    cap.release()
-
-    return frames
-
-def save_frame_as_video(video, name):
-    T, H, W, C = video.shape
-
-    out = cv2.VideoWriter(name, codec, 11, (W, H), True)
-
-    for frame in video:
-        out.write(frame)
-
-    out.release()
+    return output_video_path, None
 
 
-def extract_evenly_distributed_frames(video_tensor, num_frames=11):
-    T, C, H, W = video_tensor.shape
+def process_split(split_name, split_df, base_dir, output_dir, max_workers):
+    manifest_entries = []
+    futures = {}
 
-    indices = torch.linspace(0, T - 1, num_frames).long()
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        for _, row in split_df.iterrows():
+            rel_path, label = row["path"], int(row["label"])
+            src_video_path = os.path.join(base_dir, rel_path)
+            video_name = os.path.splitext(os.path.basename(rel_path))[0]
+            output_video_path = os.path.join(output_dir, f"{video_name}.avi")
 
-    return video_tensor[indices, :, :, :]
+            if os.path.exists(output_video_path):
+                manifest_entries.append({
+                    "path": os.path.relpath(output_video_path, output_dir),
+                    "label": label
+                })
+                continue
+
+            futures[executor.submit(convert_video, src_video_path, output_video_path)] = label
+
+        for future in tqdm(as_completed(futures), total=len(futures), desc=f"{split_name}"):
+            result, err = future.result()
+            label = futures[future]
+            if result is not None:
+                manifest_entries.append({
+                    "path": os.path.relpath(result, output_dir),
+                    "label": label
+                })
+            else:
+                print(f"⚠️ {err}")
+
+    return manifest_entries
 
 
 def main(args):
-    data_df = pd.read_csv(os.path.join(args.split_dir, args.split_name), sep=' ', header=None)
-    output_path = args.output_dir
+    df = pd.read_csv(args.data, sep=" ", header=None, names=["path", "label"])
+    train_df, temp_df = train_test_split(df, test_size=0.3, random_state=42, shuffle=True)
+    val_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=42, shuffle=True)
 
-    os.makedirs(output_path, exist_ok=True)
+    os.makedirs(args.output, exist_ok=True)
+    base_dir = os.path.dirname(args.data)
 
-    output_data_pair = []
+    manifest = {
+        "train": process_split("train", train_df, base_dir, args.output, args.workers),
+        "val": process_split("val", val_df, base_dir, args.output, args.workers),
+        "test": process_split("test", test_df, base_dir, args.output, args.workers)
+    }
 
-    for index, row in data_df.iterrows():
-        video_path = row[0]
-        video_label = row[1]
+    manifest_path = os.path.join(args.output, "manifest.json")
 
-        video_file = os.path.basename(video_path)
-        video_name = os.path.splitext(video_file)[0]
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
 
-        video = load_video_frames(os.path.join(args.split_dir, video_path))
-        video = extract_evenly_distributed_frames(video, args.num_frames)
-
-        save_frame_as_video(video, os.path.join(args.output_dir, f'{video_name}.mp4'))
-
-        output_data_pair.append((f'{video_name}.mp4', video_label))
-
-    output_pd = pd.DataFrame(output_data_pair, columns=['filename', 'label'])
-    output_pd.to_csv(os.path.join(args.output_dir, args.output_name), header=False, index=False)
+    print(f"\n✅ Done! MJPEG videos saved in: {args.output}")
+    print(f"📄 Manifest written to: {manifest_path}")
 
 
-if __name__ == '__main__':
-    args = argparse.ArgumentParser()
-
-    args.add_argument('--split_name', required=True, help="Data split file path")
-    args.add_argument('--split_dir', required=True, help="Output directory")
-    args.add_argument('--output_dir', required=True, help="Output path")
-    args.add_argument("--output_name", required=True, help="Output file name")
-    args.add_argument('--num_frames', type=int, default=11, help="Number of frames")
-
-    main(args.parse_args())
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data", required=True, help="Text file with 'path label' per line")
+    parser.add_argument("--output", required=True, help="Output directory for MJPEG .avi files")
+    parser.add_argument("--workers", type=int, default=os.cpu_count() // 2,
+                        help="Number of parallel processes")
+    main(parser.parse_args())
