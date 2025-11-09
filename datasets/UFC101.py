@@ -1,8 +1,23 @@
 import os
 
+import torch
+
 from torch.utils.data import Dataset
 from torchcodec.decoders import VideoDecoder
-from torchvision.io import read_video
+
+
+class EvenVideoSampler:
+    def __init__(self, num_samples: int):
+        self.num_samples = num_samples
+
+    def __call__(self, total_frames: int) -> torch.Tensor:
+        if total_frames <= 0:
+            return torch.zeros(self.num_samples, dtype=torch.long)
+
+        indices = torch.linspace(0, total_frames - 1, steps=self.num_samples)
+
+        return indices.long()
+
 
 class UFC101(Dataset):
 
@@ -21,9 +36,7 @@ class UFC101(Dataset):
 
         decoder = VideoDecoder(video_path, num_ffmpeg_threads=4, seek_mode="approximate")
 
-        # frame_sample_indices = self.sampler(decoder.metadata.num_frames)
-
-        frame_sample_indices = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        frame_sample_indices = self.sampler(decoder.metadata.num_frames)
 
         video = decoder.get_frames_at(indices=frame_sample_indices)
         video = video.data

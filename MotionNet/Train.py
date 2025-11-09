@@ -1,42 +1,40 @@
 import argparse
+import json
 import os
 import sys
-from os import path
 
-import albumentations as A
-import pandas as pd
-import torch
-from torch import GradScaler, autocast
 
 sys.path.append(os.path.abspath(os.getcwd()))
 
-from albumentations.pytorch import ToTensorV2
+import torchvision.transforms.v2 as T
+import pandas as pd
+import torch
+
+from os import path
+
+from torch import GradScaler, autocast
 from torch.utils.data import DataLoader
-from torchsummary import summary
+from torchinfo import summary
 from tqdm import tqdm
 
 from Loss import MotionNetLoss
 from MotionNet import TinyMotionNet, MotionNet
-from datasets.UFC101 import UFC101
-
-
-def get_device():
-    return (
-        "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-    )
+from datasets.UFC101 import UFC101, EvenVideoSampler
 
 
 def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scaler, loss_params, device):
     model.train()
+
     running_loss = 0.0
+
     desc = f"Training Epoch {epoch_info[0]}/{epoch_info[1]}"
 
     with tqdm(dataloader, desc=desc, dynamic_ncols=True, leave=True) as pbar:
         for X, _ in pbar:
-            X = X.to(device, non_blocking=True).float() / 255.0
+            X = X.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
 
-            with autocast(device_type=device, dtype=torch.float16, enabled=True):
+            with autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
                 optical_flow = model(X)
                 loss = sum(
                     loss_fn(X, of, weight, flow_scale, border_mask, flow_mask)
@@ -58,13 +56,6 @@ def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scaler, loss_
             running_loss += loss.item()
 
     return running_loss / len(dataloader)
-
-
-def prepare_transforms():
-    return A.Compose([
-        A.Resize(224, 224),
-        ToTensorV2()
-    ])
 
 
 def create_flow_border_mask(shape):
@@ -92,14 +83,22 @@ def create_border_mask(shape, border_ratio=0.1):
 
 def main(args):
     os.makedirs(args.output, exist_ok=True)
-    device = get_device()
 
-    df = pd.read_csv(path.join(args.dir, 'train.csv'))
+    device = args.device
 
-    train_data = UFC101(df, args.dir, transform=prepare_transforms())
+    sampler = EvenVideoSampler(num_samples=11)
+
+    with open(path.join(args.dir, 'manifest.json'), "r") as f:
+        df = pd.DataFrame(json.load(f)["train"], columns=["path", "label"])
+
+    train_data = UFC101(df, args.dir, sampler=sampler, transform=T.Compose([
+        T.Resize((224, 224)),
+        T.ConvertImageDtype(torch.float32),
+    ]))
+
     train_loader = DataLoader(
-        train_data, batch_size=args.batch, shuffle=True, pin_memory=True,
-        pin_memory_device=device, num_workers=args.workers
+        train_data, batch_size=args.batch, shuffle=True, num_workers=args.workers,
+        persistent_workers=True
     )
 
     if args.tiny:
@@ -113,7 +112,6 @@ def main(args):
             create_flow_border_mask((1, 20, size, size)).to(device)
             for size in [112, 56, 28]
         ]
-
     else:
         model = MotionNet()
 
@@ -136,7 +134,7 @@ def main(args):
     }
 
     model = model.to(device)
-    summary(model, (33, 224, 224))
+    summary(model, (1, 33, 224, 224))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     scaler = GradScaler(enabled=True)
@@ -155,11 +153,13 @@ def main(args):
             print(f"Checkpoint saved at {checkpoint_path}")
 
     torch.save(model.state_dict(), path.join(args.output, "last.pt"))
+
     print(f"Training complete. Model saved to {args.output}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Train MotionNet for unsupervised learning')
+
     parser.add_argument('--dir', help='Directory of data', required=True, type=str)
     parser.add_argument('--epochs', help='Number of epochs', default=50, type=int)
     parser.add_argument('--seed', help='Seed for random number generator', default=42, type=int)
@@ -168,5 +168,6 @@ if __name__ == "__main__":
     parser.add_argument('--workers', help='Number of data loading workers', default=6, type=int)
     parser.add_argument("--tiny", action='store_true', help="Use tiny motionet", default=False)
     parser.add_argument('--output', help='Output directory of model', required=True, type=str)
+    parser.add_argument("--device", default="cuda:0", help="Device to use for training. Default: cuda:0.")
 
     main(parser.parse_args())
