@@ -1,4 +1,5 @@
 import os
+import random
 
 import torch
 
@@ -11,12 +12,21 @@ class EvenVideoSampler:
         self.num_samples = num_samples
 
     def __call__(self, total_frames: int) -> torch.Tensor:
-        if total_frames <= 0:
-            return torch.zeros(self.num_samples, dtype=torch.long)
-
         indices = torch.linspace(0, total_frames - 1, steps=self.num_samples)
 
-        return indices.long()
+        return indices
+
+
+class ConsecutiveVideoSampler(Dataset):
+    def __init__(self, num_samples: int):
+        self.num_samples = num_samples
+
+    def __call__(self, total_frames: int) -> torch.Tensor:
+        start_position = random.randint(0, total_frames - self.num_samples - 1)
+
+        indices = torch.linspace(start_position, start_position + self.num_samples, steps=self.num_samples)
+
+        return indices
 
 
 class UFC101(Dataset):

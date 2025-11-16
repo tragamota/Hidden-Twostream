@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from Loss import MotionNetLoss
 from MotionNet import TinyMotionNet, MotionNet
-from datasets.UFC101 import UFC101, EvenVideoSampler
+from datasets.UFC101 import UFC101, EvenVideoSampler, ConsecutiveVideoSampler
 
 
 def train_epoch(epoch_info, dataloader, model, loss_fn, optimizer, scaler, loss_params, device):
@@ -86,7 +86,7 @@ def main(args):
 
     device = args.device
 
-    sampler = EvenVideoSampler(num_samples=11)
+    sampler = ConsecutiveVideoSampler(num_samples=11)
 
     with open(path.join(args.dir, 'manifest.json'), "r") as f:
         df = pd.DataFrame(json.load(f)["train"], columns=["path", "label"])
