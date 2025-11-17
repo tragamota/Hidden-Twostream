@@ -61,45 +61,33 @@ class SmoothnessLoss(nn.Module):
 
 class SSIMLoss(nn.Module):
     def __init__(self, patch=8, c1=1e-4, c2=1e-3):
-        super(SSIMLoss, self).__init__()
-        self.patch_size = patch
+        super().__init__()
+        self.patch = patch
         self.c1 = c1
         self.c2 = c2
 
-    def compute_ssim(self, I1_patches, I2_patches):
-        # Compute mean
-        mu1 = I1_patches.mean(dim=(-1, -2), keepdim=True)  # (B, C, N, 1, 1)
-        mu2 = I2_patches.mean(dim=(-1, -2), keepdim=True)
+    def forward(self, I1, I2):
+        K = self.patch
 
-        # Compute variance
-        sigma1 = ((I1_patches - mu1) ** 2).mean(dim=(-1, -2), keepdim=True)
-        sigma2 = ((I2_patches - mu2) ** 2).mean(dim=(-1, -2), keepdim=True)
+        # Patch-wise means
+        mu1 = F.avg_pool2d(I1, kernel_size=K, stride=K, padding=0)
+        mu2 = F.avg_pool2d(I2, kernel_size=K, stride=K, padding=0)
 
-        # Compute covariance
-        sigma12 = ((I1_patches - mu1) * (I2_patches - mu2)).mean(dim=(-1, -2), keepdim=True)
+        # Patch-wise variances
+        sigma1 = F.avg_pool2d(I1 * I1, kernel_size=K, stride=K) - mu1 * mu1
+        sigma2 = F.avg_pool2d(I2 * I2, kernel_size=K, stride=K) - mu2 * mu2
 
-        # Compute SSIM
-        numerator = (2 * mu1 * mu2 + self.c1) * (2 * sigma12 + self.c2)
-        denominator = (mu1 ** 2 + mu2 ** 2 + self.c1) * (sigma1 + sigma2 + self.c2)
+        # Patch-wise covariance
+        sigma12 = F.avg_pool2d(I1 * I2, kernel_size=K, stride=K) - mu1 * mu2
+
+        # SSIM numerator & denominator (per patch)
+        numerator   = (2 * mu1 * mu2 + self.c1) * (2 * sigma12 + self.c2)
+        denominator = (mu1 * mu1 + mu2 * mu2 + self.c1) * (sigma1 + sigma2 + self.c2)
+
         ssim = numerator / denominator
 
-        return ssim  # (B, C, N, 1, 1)
+        return (1 - ssim).mean()
 
-    def forward(self, I1, I2):
-        local_patch_size = min(self.patch_size, I1.shape[2], I1.shape[3])
-
-        I1_patches = I1.unfold(2, local_patch_size, local_patch_size).unfold(3, local_patch_size, local_patch_size)
-        I2_patches = I2.unfold(2, local_patch_size, local_patch_size).unfold(3, local_patch_size, local_patch_size)
-
-        B, C, H_p, W_p, patch_h, patch_w = I1_patches.shape
-        I1_patches = I1_patches.reshape(B, C, -1, patch_h, patch_w)  # (B, C, N, h, w)
-        I2_patches = I2_patches.reshape(B, C, -1, patch_h, patch_w)
-
-        ssim = self.compute_ssim(I1_patches, I2_patches)  # (B, C, N, 1, 1)
-
-        loss = (1 - ssim)
-
-        return loss.mean()
 
 
 class MotionNetLoss(nn.Module):
