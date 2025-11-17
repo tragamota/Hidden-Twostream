@@ -35,18 +35,28 @@ class SmoothnessLoss(nn.Module):
         super(SmoothnessLoss, self).__init__()
 
     def forward(self, flow: torch.Tensor, border_mask: torch.Tensor):
-        flow = flow * border_mask
-
         flow_x = flow[:, 0::2, :, :]
         flow_y = flow[:, 1::2, :, :]
 
-        delta_Vx_x = torch.gradient(flow_x, dim=1)[0]
-        delta_Vx_y = torch.gradient(flow_x, dim=2)[0]
-        delta_Vy_x = torch.gradient(flow_y, dim=1)[0]
-        delta_Vy_y = torch.gradient(flow_y, dim=2)[0]
+        du_dx = flow_x[..., :, 1:] - flow_x[..., :, :-1]
+        du_dy = flow_x[..., 1:, :] - flow_x[..., :-1, :]
 
-        return (self.charbonnier_penalty(delta_Vx_x, alpha=0.3) + self.charbonnier_penalty(delta_Vx_y, alpha=0.3) +
-                self.charbonnier_penalty(delta_Vy_x, alpha=0.3) + self.charbonnier_penalty(delta_Vy_y, alpha=0.3))
+        dv_dx = flow_y[..., :, 1:] - flow_y[..., :, :-1]
+        dv_dy = flow_y[..., 1:, :] - flow_y[..., :-1, :]
+
+        du_dx = F.pad(du_dx, (0, 1, 0, 0))
+        du_dy = F.pad(du_dy, (0, 0, 0, 1))
+        dv_dx = F.pad(dv_dx, (0, 1, 0, 0))
+        dv_dy = F.pad(dv_dy, (0, 0, 0, 1))
+
+        loss = (
+                self.charbonnier(du_dx, alpha=0.3) +
+                self.charbonnier(du_dy, alpha=0.3) +
+                self.charbonnier(dv_dx, alpha=0.3) +
+                self.charbonnier(dv_dy, alpha=0.3)
+        )
+
+        return loss.mean()
 
 
 class SSIMLoss(nn.Module):
