@@ -162,16 +162,16 @@ class TinyMotionNet(nn.Module):
         conv4_out = self.relu(self.conv4(conv3_out))
 
         flow4_out = self.flow4(conv4_out)
-        flow4_upsampled = self.flow4_upsample(flow4_out)
+        flow4_up = torch.nn.functional.interpolate(flow4_out, size=conv3_out.shape[-2:], mode='bilinear', align_corners=True)
 
-        deconv3_out = self.deconv3(conv4_out)
-        xconv3_out = self.xconv3(torch.cat((deconv3_out, flow4_upsampled, conv3_out), dim=1))
+        deconv3_out = self.relu(self.deconv3(conv4_out))
+        xconv3_out = self.relu(self.xconv3(torch.cat((deconv3_out, flow4_up, conv3_out), dim=1)))
 
         flow3_out = self.flow3(xconv3_out)
-        flow3_upsampled = self.flow3_upsample(flow3_out)
+        flow3_up = torch.nn.functional.interpolate(flow4_out, size=conv2_out.shape[-2:], mode='bilinear', align_corners=True)
 
-        deconv2_out = self.deconv2(xconv3_out)
-        xconv2_out = self.xconv2(torch.cat((deconv2_out, flow3_upsampled, conv2_out), dim=1))
+        deconv2_out = self.relu(self.deconv2(xconv3_out))
+        xconv2_out = self.relu(self.xconv2(torch.cat((deconv2_out, flow3_up, conv2_out), dim=1)))
 
         flow2_out = self.flow2(xconv2_out)
 
