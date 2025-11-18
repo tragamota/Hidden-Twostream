@@ -20,10 +20,8 @@ class PixelwiseReconstructionLoss(nn.Module):
     def __init__(self):
         super(PixelwiseReconstructionLoss, self).__init__()
 
-    def forward(self, I1, I2, border_mask):
+    def forward(self, I1, I2):
         diff = I1 - I2
-
-        diff *= border_mask
 
         return self.charbonnier_penalty(diff, alpha=0.4)
 
@@ -50,10 +48,10 @@ class SmoothnessLoss(nn.Module):
         dv_dy = F.pad(dv_dy, (0, 0, 0, 1))
 
         loss = (
-                self.charbonnier(du_dx, alpha=0.3) +
-                self.charbonnier(du_dy, alpha=0.3) +
-                self.charbonnier(dv_dx, alpha=0.3) +
-                self.charbonnier(dv_dy, alpha=0.3)
+            self.charbonnier_penalty(du_dx, alpha=0.3) +
+            self.charbonnier_penalty(du_dy, alpha=0.3) +
+            self.charbonnier_penalty(dv_dx, alpha=0.3) +
+            self.charbonnier_penalty(dv_dy, alpha=0.3)
         )
 
         return loss.mean()
@@ -111,7 +109,7 @@ class MotionNetLoss(nn.Module):
         images_warped = torch.cat(images_warped, dim=1)
 
         similarity_loss = self.SSIMLoss(images_downsampled[:, 0:30, :, :], images_warped)
-        smooth_loss = self.SmoothnessLoss(flows, flow_mask).mean()
-        pixel_loss = self.PixelwiseLoss(images_downsampled[:, 0:30, :, :], images_warped, border_mask).mean()
+        smooth_loss = self.SmoothnessLoss(flows, flow_mask)
+        pixel_loss = self.PixelwiseLoss(images_downsampled[:, 0:30, :, :], images_warped).mean()
 
         return pixel_loss + smooth_weight * smooth_loss + similarity_loss
