@@ -17,14 +17,23 @@ class EvenVideoSampler:
         return indices
 
 
-class ConsecutiveVideoSampler(Dataset):
-    def __init__(self, num_samples: int):
+class ConsecutiveVideoSampler:
+    def __init__(self, num_samples: int, min_stride: int = 1, max_stride: int = 1):
         self.num_samples = num_samples
+        self.min_stride = min_stride
+        self.max_stride = max_stride
 
     def __call__(self, total_frames: int) -> torch.Tensor:
-        start_position = random.randint(0, total_frames - self.num_samples - 1)
+        stride = random.randint(self.min_stride, self.max_stride)
 
-        indices = torch.linspace(start_position, start_position + self.num_samples, steps=self.num_samples)
+        max_start = total_frames - (self.num_samples * stride)
+
+        if max_start <= 0:
+            return torch.linspace(0, total_frames - 1, steps=self.num_samples).long()
+
+        start = random.randint(0, max_start)
+
+        indices = torch.tensor([start + i * stride for i in range(self.num_samples)], dtype=torch.long)
 
         return indices
 
