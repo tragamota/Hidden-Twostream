@@ -11,16 +11,59 @@ from sklearn.model_selection import train_test_split
 from torchcodec.decoders import VideoDecoder
 from tqdm import tqdm
 
+import numpy as np
+import torch
+import cv2
+
+
+codec = cv2.VideoWriter_fourcc(*'mp4v')
+
+def load_video_frames(video_path):
+
+
+    return frames
+
+def save_frame_as_video(video, name):
+    T, H, W, C = video.shape
+
+    out = cv2.VideoWriter(name, codec, 11, (W, H), True)
+
+    for frame in video:
+        out.write(frame)
+
+    out.release()
+
+
+def extract_evenly_distributed_frames(video_tensor, num_frames=11):
+    T, C, H, W = video_tensor.shape
+
+    indices = torch.linspace(0, T - 1, num_frames).long()
+
+    return video_tensor[indices, :, :, :]
+
 
 def convert_video(src_video_path, output_video_path):
-    try:
-        decoder = VideoDecoder(src_video_path, num_ffmpeg_threads=2, seek_mode="approximate")
-        frames = [frame.permute(1, 2, 0).numpy()[:, :, ::-1] for frame in decoder]  # to HWC, BGR
-    except Exception as e:
-        return None, f"Decode error in {src_video_path}: {e}"
+    cap = cv2.VideoCapture(src_video_path)
 
-    if not frames:
-        return None, f"No frames in {src_video_path}"
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frame_channels = 3
+
+    frames = np.empty((total_frames, frame_height, frame_width, frame_channels), dtype=np.uint8)
+
+    for i in range(total_frames):
+        ret, frame = cap.read()
+
+        if not ret:
+            print(f"Error reading frame {i} / {total_frames} from {src_video_path}")
+            break
+
+        frames[i] = frame
+
+    frames = frames[:i]
+
+    cap.release()
 
     h, w, _ = frames[0].shape
     os.makedirs(os.path.dirname(output_video_path), exist_ok=True)
