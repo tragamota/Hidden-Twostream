@@ -1,34 +1,39 @@
 import torch
 import torch.nn.functional as F
-from torch import nn
-
 
 class WarpTransformation(torch.nn.Module):
     def __init__(self):
         super(WarpTransformation, self).__init__()
 
     def forward(self, image, flow):
-        batch_size, channels, height, width = image.size()
+        B, C, H, W = image.shape
 
-        grid_x, grid_y = torch.meshgrid(torch.arange(0, width), torch.arange(0, height), indexing='ij')
+        y, x = torch.meshgrid(
+            torch.arange(0, H, device=image.device),
+            torch.arange(0, W, device=image.device),
+            indexing='ij'
+        )
 
-        grid_x = grid_x.float().to(image.device)
-        grid_y = grid_y.float().to(image.device)
+        x = 2.0 * x.float() / (W - 1) - 1.0
+        y = 2.0 * y.float() / (H - 1) - 1.0
 
-        grid_x = 2.0 * grid_x / (width - 1) - 1.0
-        grid_y = 2.0 * grid_y / (height - 1) - 1.0
+        base_grid = torch.stack((x, y), dim=-1)   # H × W × 2
+        base_grid = base_grid.unsqueeze(0).repeat(B, 1, 1, 1)
 
-        grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0)
-        grid = grid.repeat(batch_size, 1, 1, 1)
+        flow_norm = torch.zeros_like(flow)
+        flow_norm[:, 0, :, :] = 2.0 * flow[:, 0, :, :] / (W - 1)
+        flow_norm[:, 1, :, :] = 2.0 * flow[:, 1, :, :] / (H - 1)
 
-        flow = flow.permute(0, 2, 3, 1)
-        grid = grid + flow
+        flow_norm = flow_norm.permute(0, 2, 3, 1)
 
-        # Rescale to [-1, 1] range (required by grid_sample)
-        grid = grid * 2.0 - 1.0
+        sampling_grid = base_grid + flow_norm
 
-        # Use grid_sample to warp the image based on the flow
-        warped_image = F.grid_sample(image, grid, mode='bilinear', padding_mode='border', align_corners=False)
+        warped_image = F.grid_sample(
+            image,
+            sampling_grid,
+            mode="bilinear",
+            padding_mode="border",
+            align_corners=False
+        )
 
         return warped_image
-
